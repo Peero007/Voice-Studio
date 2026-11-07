@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Voice Studio</title>
+<meta name="description" content="Record or upload audio, remove noise, and shape the tone toward a studio sound. Runs entirely in your browser.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--tx:#1b1b1a;--mut:#8a877f;--ln:#e3e0d9;--ac:#c2410c;--ac2:#fff;--wf:#cfcac0;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141413;--card:#1e1e1c;--tx:#efede8;--mut:#8f8c84;--ln:#33322e;--ac:#fb923c;--ac2:#1b1b1a;--wf:#4a4842}}
+:root[data-theme="dark"]{--bg:#141413;--card:#1e1e1c;--tx:#efede8;--mut:#8f8c84;--ln:#33322e;--ac:#fb923c;--ac2:#1b1b1a;--wf:#4a4842}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:720px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:0 0 2px}p.sub{margin:0 0 16px;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:14px;padding:14px;margin-bottom:12px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,.btn{font:inherit;border:1px solid var(--ln);background:var(--card);color:var(--tx);border-radius:10px;padding:9px 14px;cursor:pointer}
+button.p{background:var(--ac);color:var(--ac2);border-color:var(--ac);font-weight:600}
+button.on{background:var(--tx);color:var(--bg)}button:disabled{opacity:.4;cursor:default}
+label.t{display:flex;gap:6px;align-items:center;color:var(--mut);font-size:13px}
+#meter{height:6px;background:var(--ln);border-radius:3px;overflow:hidden;margin-top:10px}#lv{height:100%;width:0;background:var(--ac)}
+#st{color:var(--mut);font-size:13px;margin-top:8px;min-height:18px}
+canvas{width:100%;height:110px;display:block;cursor:pointer}
+h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:0 0 10px}
+.sl{display:grid;grid-template-columns:1fr auto;gap:2px 8px;margin-bottom:10px}.sl span{font-variant-numeric:tabular-nums;color:var(--mut)}
+.sl input{grid-column:1/3;width:100%;accent-color:var(--ac)}
+select{font:inherit;background:var(--card);color:var(--tx);border:1px solid var(--ln);border-radius:8px;padding:6px}
+.note{color:var(--mut);font-size:13px}
+</style></head><body><main>
+<h1>Voice Studio</h1>
+<p class="sub">Record or upload, clean the noise, then shape the tone toward a polished studio sound.</p>
+
+<div class="card">
+ <div class="row">
+  <button class="p" id="rec">Record</button>
+  <label class="btn" style="position:relative;overflow:hidden">Upload audio<input type="file" id="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.webm,.ogg" style="position:absolute;inset:0;opacity:0;cursor:pointer;font-size:0"></label>
+  <label class="t"><input type="checkbox" id="ec" checked>Echo cancel</label>
+  <label class="t"><input type="checkbox" id="ns" checked>Browser noise suppression</label>
+ </div>
+ <div id="meter"><div id="lv"></div></div>
+ <div id="st">Tip: stay silent for 2 seconds at the start so the denoiser can learn your room.</div>
+</div>
+
+<div class="card">
+ <canvas id="wf"></canvas>
+ <div class="row" style="margin-top:10px">
+  <button class="p" id="pl" disabled>Play</button>
+  <button id="abO" disabled>Original</button><button id="abE" class="on" disabled>Enhanced</button>
+  <button id="ex" disabled style="margin-left:auto">Export WAV</button>
+ </div>
+ <div class="note" style="margin-top:6px">Waveform: gray is original, orange is enhanced. Tap it to seek. Export is normalized to -1 dB peak and saved as a WAV file.</div>
+</div>
+
+<div class="card"><h2>Presets</h2><div class="row" id="pre"></div></div>
+<div class="card"><h2>Denoise</h2><div id="g0"></div></div>
+<div class="card"><h2>Clean up</h2><div id="g1"><div class="sl"><label for="hum">De-hum (mains)</label><select id="hum"><option value="0">Off</option><option value="50" selected>50 Hz</option><option value="60">60 Hz</option></select></div></div></div>
+<div class="card"><h2>Tone</h2><div id="g2"></div></div>
+<p class="note">Processing removes noise and reshapes tone, but it cannot restore detail a cheap mic never captured. For the best result, speak 10 to 15 cm from the mic in a soft, furnished room.</p>
+</main>
+<script>
+addEventListener('error',e=>{const s=document.getElementById('st');if(s)s.textContent='Script error: '+e.message});
+const $=id=>document.getElementById(id),V=id=>+$(id).value;
+const G=[[0,[['nr','Noise reduction',0,100,1,60,'%'],['cut','Max cut',6,40,1,20,' dB'],['sm','Smoothing',0,100,1,50,'%'],['gate','Gate between words',0,100,1,30,'%']]],
+[1,[['hp','Rumble cut',20,250,5,80,' Hz']]],
+[2,[['warm','Warmth (120 Hz)',-6,9,.5,3,' dB'],['mud','Mud cut (250 Hz)',-9,0,.5,-3,' dB'],['pres','Presence (3.5 kHz)',-3,9,.5,3,' dB'],['air','Air (11 kHz)',-3,9,.5,2,' dB'],['ess','De-ess (6.5 kHz)',-10,0,.5,-2,' dB'],['comp','Compression',0,100,1,50,'%'],['out','Output gain',-6,12,.5,0,' dB']]]];
+const U={};
+G.forEach(([g,a])=>a.forEach(([id,lb,mn,mx,st,df,u])=>{U[id]=u;$('g'+g).insertAdjacentHTML('beforeend',`<div class="sl"><label for="${id}">${lb}</label><span id="v_${id}"></span><input type="range" id="${id}" min="${mn}" max="${mx}" step="${st}" value="${df}"></div>`)}));
+const PR={'Cheap mic rescue':{nr:75,cut:26,sm:55,gate:45,hp:110,warm:5,mud:-5,pres:4,air:3,ess:-3,comp:65,out:0},
+'Broadcast':{nr:55,cut:20,sm:45,gate:30,hp:80,warm:4,mud:-3,pres:3,air:2,ess:-3,comp:75,out:1},
+'Warm podcast':{nr:50,cut:18,sm:50,gate:25,hp:70,warm:6,mud:-2,pres:2,air:1,ess:-2,comp:55,out:0},
+'Gentle clean':{nr:35,cut:12,sm:50,gate:10,hp:60,warm:1,mud:-1,pres:1,air:1,ess:-1,comp:25,out:0},
+'Flat':{nr:0,cut:20,sm:50,gate:0,hp:20,warm:0,mud:0,pres:0,air:0,ess:0,comp:0,out:0}};
+Object.keys(PR).forEach(k=>{const b=document.createElement('button');b.textContent=k;b.onclick=()=>{Object.entries(PR[k]).forEach(([i,v])=>$(i).value=v);upd()};$('pre').appendChild(b)});
+
+let ctx,live,bus,rawM,rawB,den,sr,src,startT=0,offset=0,playing=false,ab='fx',dnKey='',tm,mr,stream,chunks=[];
+const st=t=>$('st').textContent=t;
+
+// ---- FFT spectral denoise ----
+function fft(re,im){const n=re.length;for(let i=1,j=0;i<n;i++){let b=n>>1;for(;j&b;b>>=1)j^=b;j^=b;if(i<j){[re[i],re[j]]=[re[j],re[i]];[im[i],im[j]]=[im[j],im[i]]}}
+for(let l=2;l<=n;l<<=1){const a=-2*Math.PI/l,wr=Math.cos(a),wi=Math.sin(a);for(let i=0;i<n;i+=l){let cr=1,ci=0;for(let k=0;k<l/2;k++){const u=i+k,v=u+l/2,tr=re[v]*cr-im[v]*ci,ti=re[v]*ci+im[v]*cr;re[v]=re[u]-tr;im[v]=im[u]-ti;re[u]+=tr;im[u]+=ti;const t=cr*wr-ci*wi;ci=cr*wi+ci*wr;cr=t}}}}
+function denoise(x,P){
+ const N=2048,H=512,B=N/2+1,pad=N,len=x.length+2*pad,w=new Float32Array(N).map((_,i)=>.5-.5*Math.cos(2*Math.PI*i/N));
+ const xs=new Float32Array(len);xs.set(x,pad);const F=Math.floor((len-N)/H)+1,rms=new Float32Array(F),re=new Float32Array(N),im=new Float32Array(N);
+ const cand=[];
+ for(let f=0;f<F;f++){let s=0;for(let i=0;i<N;i++){const v=xs[f*H+i];s+=v*v}rms[f]=Math.sqrt(s/N);const a=f*H;if(a>=pad&&a+N<=pad+x.length&&rms[f]>1e-6)cand.push(f)}
+ if(cand.length<3)return x;
+ cand.sort((a,b)=>rms[a]-rms[b]);const q=cand.slice(0,Math.max(3,Math.floor(cand.length*.1)));
+ const load=f=>{for(let i=0;i<N;i++){re[i]=xs[f*H+i]*w[i];im[i]=0}fft(re,im)};
+ const nm=new Float32Array(B);let nr=0;
+ q.forEach(f=>{load(f);for(let k=0;k<B;k++)nm[k]+=re[k]*re[k]+im[k]*im[k];nr+=rms[f]});
+ for(let k=0;k<B;k++)nm[k]=Math.sqrt(nm[k]/q.length);nr/=q.length;
+ const al=1+P.nr/100*3.5,fl=10**(-P.cut/20),s=P.sm/100*.8,gt=nr*(1+P.gate/20),depth=10**(-(P.gate*.15)/20),Gn=new Float32Array(B).fill(1),y=new Float32Array(len);let gg=1;
+ for(let f=0;f<F;f++){load(f);
+  gg+=((P.gate>0&&rms[f]<gt?depth:1)-gg)*.35;
+  for(let k=0;k<B;k++){const m=Math.hypot(re[k],im[k])+1e-9,g=Math.max(fl,1-al*nm[k]/m);Gn[k]=g>Gn[k]?.3*Gn[k]+.7*g:s*Gn[k]+(1-s)*g}
+  for(let k=0;k<N;k++){const g=Gn[k<B?k:N-k]*gg;re[k]*=g;im[k]*=g}
+  fft(im,re);
+  for(let i=0;i<N;i++)y[f*H+i]+=re[i]/N*w[i]}
+ const o=new Float32Array(x.length);for(let i=0;i<x.length;i++)o[i]=y[pad+i]/1.5;return o}
+
+// ---- tone chain (live and offline) ----
+function mk(c){const n={},bq=(t,f,q)=>{const x=c.createBiquadFilter();x.type=t;x.frequency.value=f;if(q)x.Q.value=q;return x};
+ n.hp=bq('highpass',80,.7);n.h=[1,2,3].map(()=>bq('notch',50,30));n.w=bq('lowshelf',120);n.m=bq('peaking',250,1);n.p=bq('peaking',3500,.8);n.e=bq('peaking',6500,3);n.a=bq('highshelf',11000);
+ n.c=c.createDynamicsCompressor();n.o=c.createGain();
+ [n.hp,...n.h,n.w,n.m,n.p,n.e,n.a,n.c,n.o].reduce((a,b)=>(a.connect(b),b));n.in=n.hp;n.out=n.o;return n}
+function ap(n){n.hp.frequency.value=V('hp');const hz=V('hum');n.h.forEach((f,i)=>{f.type=hz?'notch':'allpass';f.frequency.value=(hz||50)*(i+1)});
+ n.w.gain.value=V('warm');n.m.gain.value=V('mud');n.p.gain.value=V('pres');n.a.gain.value=V('air');n.e.gain.value=V('ess');
+ const cp=V('comp');n.c.threshold.value=-12-cp*.25;n.c.ratio.value=1+cp*.05;n.c.knee.value=12;n.c.attack.value=.005;n.c.release.value=.2;n.o.gain.value=10**((V('out')+cp*.06)/20)}
+function getCtx(){ctx=ctx||new AudioContext();if(!live){live=mk(ctx);bus=ctx.createGain();live.out.connect(bus);bus.connect(ctx.destination);ap(live)}ctx.resume()}
+
+// ---- helpers ----
+const mono=b=>{const x=new Float32Array(b.length),n=b.numberOfChannels;for(let c=0;c<n;c++){const d=b.getChannelData(c);for(let i=0;i<x.length;i++)x[i]+=d[i]/n}return x};
+const mkBuf=x=>{const b=ctx.createBuffer(1,x.length,sr);b.copyToChannel(x,0);return b};
+function wav(d,rate,sc){const b=new DataView(new ArrayBuffer(44+d.length*2)),s=(o,t)=>[...t].forEach((c,i)=>b.setUint8(o+i,c.charCodeAt(0)));
+ s(0,'RIFF');b.setUint32(4,36+d.length*2,true);s(8,'WAVEfmt ');b.setUint32(16,16,true);b.setUint16(20,1,true);b.setUint16(22,1,true);b.setUint32(24,rate,true);b.setUint32(28,rate*2,true);b.setUint16(32,2,true);b.setUint16(34,16,true);s(36,'data');b.setUint32(40,d.length*2,true);
+ for(let i=0;i<d.length;i++)b.setInt16(44+i*2,Math.max(-1,Math.min(1,d[i]*sc))*32767,true);return new Uint8Array(b.buffer)}
+
+// ---- loading and denoising ----
+async function load(buf){try{getCtx();const b=await ctx.decodeAudioData(buf);stopSrc();playing=false;offset=0;sr=b.sampleRate;rawM=mono(b);rawB=mkBuf(rawM);dnKey='';runDn()}catch(e){st('Could not read that audio: '+(e&&e.message||e))}}
+function sched(){if(!rawM)return;st('Cleaning...');clearTimeout(tm);tm=setTimeout(runDn,250)}
+function runDn(){const P={nr:V('nr'),cut:V('cut'),sm:V('sm'),gate:V('gate')},k=Object.values(P).join();
+ if(k!==dnKey){den=mkBuf(P.nr?denoise(rawM,P):rawM);dnKey=k}
+ ['pl','abO','abE','ex'].forEach(i=>$(i).disabled=false);st('Ready');if(playing){offset=pos();play()}ui();draw()}
+
+// ---- recording ----
+async function toggleRec(){
+ if(mr&&mr.state==='recording'){mr.stop();return}
+ try{getCtx();stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:$('ec').checked,noiseSuppression:$('ns').checked,autoGainControl:false}})}
+ catch(e){st('Microphone blocked ('+(e&&e.name||'error')+'). This embedded page may not be allowed to use the mic. Check the browser permission for this site, or use Upload audio.');return}
+ pause();chunks=[];mr=new MediaRecorder(stream);mr.ondataavailable=e=>chunks.push(e.data);
+ const an=ctx.createAnalyser(),ms=ctx.createMediaStreamSource(stream),d=new Uint8Array(an.fftSize),t0=Date.now();ms.connect(an);
+ mr.onstop=async()=>{stream.getTracks().forEach(t=>t.stop());ms.disconnect();$('rec').textContent='Record';$('lv').style.width='0';st('Processing...');await load(await new Blob(chunks).arrayBuffer())};
+ mr.start();$('rec').textContent='Stop';
+ (function m(){if(mr.state!=='recording')return;an.getByteTimeDomainData(d);let pk=0;for(const v of d)pk=Math.max(pk,Math.abs(v-128));$('lv').style.width=Math.min(100,pk/128*160)+'%';st('Recording '+((Date.now()-t0)/1000).toFixed(1)+' s');requestAnimationFrame(m)})()}
+
+// ---- playback ----
+const pos=()=>playing?Math.min(den.duration,offset+ctx.currentTime-startT):offset;
+function stopSrc(){if(src){src.onended=null;try{src.stop()}catch(e){}src=null}}
+function play(){if(!den)return;getCtx();stopSrc();const s=src=ctx.createBufferSource(),fx=ab==='fx';s.buffer=fx?den:rawB;s.connect(fx?live.in:bus);
+ s.onended=()=>{if(src===s){playing=false;offset=0;src=null;ui();draw()}};offset=Math.min(offset,den.duration-.01);s.start(0,offset);startT=ctx.currentTime;playing=true;ui();loop()}
+function pause(){if(playing){offset=pos();stopSrc();playing=false;ui()}}
+function loop(){draw();if(playing)requestAnimationFrame(loop)}
+const ui=()=>{$('pl').textContent=playing?'Pause':'Play';$('abO').className=ab==='raw'?'on':'';$('abE').className=ab==='fx'?'on':''};
+$('pl').onclick=()=>playing?pause():play();$('rec').onclick=toggleRec;
+$('abO').onclick=()=>{ab='raw';ui();if(playing){offset=pos();play()}};$('abE').onclick=()=>{ab='fx';ui();if(playing){offset=pos();play()}};
+$('file').onchange=e=>{const f=e.target.files[0];if(f){st('Loading...');f.arrayBuffer().then(load)}};
+$('wf').onclick=e=>{if(!den)return;const r=e.target.getBoundingClientRect();offset=(e.clientX-r.left)/r.width*den.duration;if(playing)play();else draw()};
+
+// ---- waveform ----
+function layer(g,x,W,H,col){g.fillStyle=col;const n=x.length,spp=n/W,step=Math.max(1,Math.floor(spp/40));
+ for(let px=0;px<W;px++){let m=0;const a=Math.floor(px*spp),b=Math.min(n,Math.floor((px+1)*spp));for(let i=a;i<b;i+=step){const v=Math.abs(x[i]);if(v>m)m=v}const h=Math.max(1,m*H*.95);g.fillRect(px,(H-h)/2,1,h)}}
+function draw(){const c=$('wf'),dp=devicePixelRatio||1,W=c.width=Math.floor(c.clientWidth*dp),H=c.height=Math.floor(c.clientHeight*dp),g=c.getContext('2d');
+ if(!rawM||!den)return;const cs=getComputedStyle(document.documentElement);
+ layer(g,rawM,W,H,cs.getPropertyValue('--wf'));layer(g,den.getChannelData(0),W,H,cs.getPropertyValue('--ac'));
+ g.fillStyle=cs.getPropertyValue('--tx');g.fillRect(Math.floor(pos()/den.duration*W),0,2*dp,H)}
+addEventListener('resize',draw);
+
+// ---- controls ----
+function upd(){Object.keys(U).forEach(i=>$('v_'+i).textContent=($(i).value>0&&U[i]===' dB'?'+':'')+$(i).value+U[i]);if(live)ap(live);if(rawM)sched()}
+document.querySelectorAll('input[type=range],select').forEach(e=>e.addEventListener('input',upd));upd();
+
+// ---- export ----
+$('ex').onclick=async()=>{
+ 
+ st('Rendering...');const oc=new OfflineAudioContext(1,den.length,sr),s=oc.createBufferSource(),n=mk(oc);s.buffer=den;ap(n);s.connect(n.in);n.out.connect(oc.destination);s.start();
+ const d=(await oc.startRendering()).getChannelData(0);let pk=0;for(let i=0;i<d.length;i++){const v=Math.abs(d[i]);if(v>pk)pk=v}
+ try{const f=new Blob([wav(d,sr,pk?.891/pk:1)],{type:'audio/wav'});Object.assign(document.createElement('a'),{href:URL.createObjectURL(f),download:'enhanced-voice.wav'}).click();st('Saved.')}catch(e){st(e&&e.code==='declined'?'Save cancelled.':'Could not save here.')}};
+</script></body></html>
